@@ -138,7 +138,7 @@ def _get_neighbor_ipaddress_list_by_hostname(hostname):
     return addrs
 
 def _change_bgp_session_status_by_addr(ipaddress, status, verbose):
-    """Start up or shut down BGP session by IP address 
+    """Start up or shut down BGP session by IP address
     """
     verb = 'Starting' if status == 'up' else 'Shutting'
     click.echo("{} {} BGP session with neighbor {}...".format(verb, status, ipaddress))
@@ -422,6 +422,36 @@ def reload():
             click.secho('QoS definition template not found at {}'.format(qos_template_file), fg='yellow')
     else:
         click.secho('Buffer definition template not found at {}'.format(buffer_template_file), fg='yellow')
+
+#
+# 'warm_restart' group
+#
+@cli.group()
+@click.pass_context
+@click.option('-s', '--redis-unix-socket-path', help='unix socket path for redis connection')
+def warm_restart(ctx, redis_unix_socket_path):
+    """warm_restart-related configuration tasks"""
+    kwargs = {}
+    if redis_unix_socket_path:
+        kwargs['unix_socket_path'] = redis_unix_socket_path
+    config_db = ConfigDBConnector(**kwargs)
+    config_db.connect(wait_for_init=False)
+    ctx.obj = {'db': config_db}
+    pass
+
+@warm_restart.command('enable')
+@click.argument('module', metavar='<module>', default='system', required=False, type=click.Choice(["system", "swss", "teamd"]))
+@click.pass_context
+def warm_restart_enable(ctx, module):
+    db = ctx.obj['db']
+    db.set_entry('WARM_RESTART', module, {'enable': 'true'})
+
+@warm_restart.command('disable')
+@click.argument('module', metavar='<module>', default='system', required=False, type=click.Choice(["system", "swss", "teamd"]))
+@click.pass_context
+def warm_restart_enable(ctx, module):
+    db = ctx.obj['db']
+    db.set_entry('WARM_RESTART', module, {'enable': 'false'})
 
 #
 # 'vlan' group

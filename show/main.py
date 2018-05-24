@@ -780,7 +780,7 @@ def cpu(verbose):
     # Run top in batch mode to prevent unexpected newline after each newline
     cmd = "top -bn 1 -o %CPU"
     run_command(cmd, display_cmd=verbose)
- 
+
 # 'memory' subcommand
 @processes.command()
 @click.option('--verbose', is_flag=True, help="Enable verbose output")
@@ -1165,7 +1165,6 @@ def reboot_cause():
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
         click.echo(proc.stdout.read())
 
-
 #
 # 'line' command ("show line")
 #
@@ -1174,6 +1173,40 @@ def line():
     """Show all /dev/ttyUSB lines and their info"""
     cmd = "consutil show"
     run_command(cmd, display_cmd=verbose)
+    # TODO: Stub
+    return
+
+@cli.command()
+def warm_restart():
+    """Show AAA configuration"""
+    config_db = ConfigDBConnector()
+    config_db.connect()
+    data = config_db.get_table('WARM_RESTART')
+    output = ''
+
+    warm = {
+        'system': {
+            'enable': 'false'
+        },
+        'swss': {
+            'enable': 'false'
+        },
+        'teamd': {
+            'enable': 'false'
+        }
+    }
+
+    if 'system' in data:
+        warm['system'].update(data['system'])
+    if 'swss' in data:
+        warm['swss'].update(data['swss'])
+    if 'teamd' in data:
+        warm['teamd'].update(data['teamd'])
+    for row in warm:
+        entry = warm[row]
+        for key in entry:
+            output += ('WARM_RESTART %s %s %s\n' % (row, key, str(entry[key])))
+    click.echo(output)
 
 
 if __name__ == '__main__':
