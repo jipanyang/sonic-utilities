@@ -1189,7 +1189,8 @@ def warm_restart():
             'enable': 'false'
         },
         'swss': {
-            'enable': 'false'
+            'enable': 'false',
+            'neighbor_timer': '5'
         },
         'teamd': {
             'enable': 'false'
