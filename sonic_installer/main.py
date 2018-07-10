@@ -317,5 +317,54 @@ def cleanup():
     if image_removed == 0:
         click.echo("No image(s) to remove")
 
+# Upgrade docker image
+@cli.command()
+@click.option('-y', '--yes', is_flag=True, callback=abort_if_false,
+        expose_value=False, prompt='New docker image will be installed, continue?')
+@click.option('--cleanup_image', is_flag=True, help="Clean up old docker images")
+@click.argument('container_name', metavar='<container_name>', required=True, type=click.Choice(["swss", "snmp", "lldp"]))
+@click.argument('tag', metavar='<tag>', required=True, type=click.STRING)
+@click.argument('url')
+def upgrade_docker(cleanup_image, container_name, tag, url):
+    """ Upgrade docker image from local binary or URL"""
+
+    # example images: docker-lldp-sv2:latest
+    cmd = "docker inspect --format '{{.Config.Image}}' " + container_name
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
+    images = proc.stdout.read().rstrip()
+
+    # example image_name: docker-lldp-sv2
+    cmd = "echo " + images + " | cut -d ':' -f 1"
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
+    image_name = proc.stdout.read().rstrip()
+
+    # example image_id: 7ed919240fb9
+    cmd = "docker images  --format '{{.ID}}' " +  image_name
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
+    image_id = proc.stdout.read()
+
+
+    DEFAULT_IMAGE_PATH = os.path.join("/tmp/", image_name)
+
+    if url.startswith('http://') or url.startswith('https://'):
+        click.echo('Downloading image...')
+        urllib.urlretrieve(url, DEFAULT_IMAGE_PATH, reporthook)
+        image_path = DEFAULT_IMAGE_PATH
+    else:
+        image_path = os.path.join("./", url)
+
+    run_command("systemctl stop %s" % container_name)
+    run_command("docker rm  %s" % container_name)
+    run_command("docker rmi  %s" % images)
+    run_command("docker load < %s" % image_path)
+    run_command("docker tag %s:latest %s:%s" % (image_name, image_name, tag))
+    run_command("systemctl restart %s" % container_name)
+    # Clean up old docker images
+    if cleanup_image:
+        run_command("docker rmi -f %s" % image_id)
+
+    run_command("sleep 5") # wait 5 seconds for application to sync
+    click.echo('Done')
+
 if __name__ == '__main__':
     cli()
