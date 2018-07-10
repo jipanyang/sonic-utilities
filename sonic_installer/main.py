@@ -361,7 +361,10 @@ def upgrade_docker(cleanup_image, container_name, tag, url):
     run_command("systemctl restart %s" % container_name)
     # Clean up old docker images
     if cleanup_image:
-        run_command("docker rmi -f %s" % image_id)
+        image_id = image_id.splitlines()
+        image_id = set(image_id)
+        for id in image_id:
+            run_command("docker rmi -f %s" % id)
 
     run_command("sleep 5") # wait 5 seconds for application to sync
     click.echo('Done')
