@@ -353,6 +353,17 @@ def upgrade_docker(cleanup_image, container_name, tag, url):
     else:
         image_path = os.path.join("./", url)
 
+    # make sure orchagent is in clean state if swss is to be upgraded
+    if container_name == "swss":
+        cmd = "docker exec -it " +  container_name + " orchagent_restart_check"
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
+        result = proc.stdout.read().rstrip()
+        if result != "RESTARTCHECK succeeded":
+            click.echo("Orchagent is not in clean state, check syslog and try later")
+            sys.exit(1)
+        else:
+            click.echo("Orchagent is in clean state and freezed for warm upgrade")
+
     run_command("systemctl stop %s" % container_name)
     run_command("docker rm  %s" % container_name)
     run_command("docker rmi  %s" % images)
