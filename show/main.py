@@ -1178,7 +1178,7 @@ def line():
 
 @cli.command()
 def warm_restart():
-    """Show AAA configuration"""
+    """Show warm restart configuration"""
     config_db = ConfigDBConnector()
     config_db.connect()
     data = config_db.get_table('WARM_RESTART')
