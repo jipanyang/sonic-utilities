@@ -339,7 +339,7 @@ def upgrade_docker(cleanup_image, container_name, tag, url):
     image_name = proc.stdout.read().rstrip()
 
     # example image_id: 7ed919240fb9
-    cmd = "docker images  --format '{{.ID}}' " +  image_name
+    cmd = "docker images --format '{{.ID}}' " + image_name
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
     image_id = proc.stdout.read()
 
@@ -355,7 +355,7 @@ def upgrade_docker(cleanup_image, container_name, tag, url):
 
     # make sure orchagent is in clean state if swss is to be upgraded
     if container_name == "swss":
-        cmd = "docker exec -it " +  container_name + " orchagent_restart_check"
+        cmd = "docker exec -it " + container_name + " orchagent_restart_check"
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
         result = proc.stdout.read().rstrip()
         if result != "RESTARTCHECK succeeded":
