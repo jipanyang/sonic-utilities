@@ -219,6 +219,7 @@ def _stop_services():
     services = [
         'dhcp_relay',
         'swss',
+        'syncd',
         'snmp',
         'lldp',
         'pmon',
@@ -235,6 +236,7 @@ def _restart_services():
         'ntp-config',
         'rsyslog-config',
         'swss',
+        'syncd',
         'bgp',
         'teamd',
         'pmon',
