@@ -1175,7 +1175,6 @@ def line():
     """Show all /dev/ttyUSB lines and their info"""
     cmd = "consutil show"
     run_command(cmd, display_cmd=verbose)
-    # TODO: Stub
     return
 
 
@@ -1247,9 +1246,9 @@ def config(redis_unix_socket_path):
             else:
                 r.append(data[k]['enable'])
 
-            if 'timer_name' in  data[k]:
-                r.append(data[k]['timer_name'])
-                r.append(data[k]['timer_duration'])
+            if 'neighsyncd_timer' in  data[k]:
+                r.append("neighsyncd_timer")
+                r.append(data[k]['neighsyncd_timer'])
             else:
                 r.append("NULL")
                 r.append("NULL")

@@ -444,14 +444,24 @@ def warm_restart(ctx, redis_unix_socket_path):
 @click.pass_context
 def warm_restart_enable(ctx, module):
     db = ctx.obj['db']
-    db.set_entry('WARM_RESTART', module, {'enable': 'true'})
+    db.mod_entry('WARM_RESTART', module, {'enable': 'true'})
 
 @warm_restart.command('disable')
 @click.argument('module', metavar='<module>', default='system', required=False, type=click.Choice(["system", "swss"]))
 @click.pass_context
 def warm_restart_enable(ctx, module):
     db = ctx.obj['db']
-    db.set_entry('WARM_RESTART', module, {'enable': 'false'})
+    db.mod_entry('WARM_RESTART', module, {'enable': 'false'})
+
+@warm_restart.command('neighsyncd_timer')
+@click.argument('seconds', metavar='<seconds>', required=True, type=int)
+@click.pass_context
+def warm_restart_neighsyncd_timer(ctx, seconds):
+    db = ctx.obj['db']
+    if seconds not in range(1,9999):
+        print "neighsyncd warm restart timer must be in range 1-9999"
+        raise click.Abort
+    db.mod_entry('WARM_RESTART', 'swss', {'neighsyncd_timer': seconds})
 
 #
 # 'vlan' group
