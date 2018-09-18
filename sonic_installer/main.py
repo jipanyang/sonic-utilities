@@ -377,11 +377,11 @@ def upgrade_docker(container_name, url, cleanup_image, enforce_check, tag):
 
         cmd = "docker exec -it " + container_name + " orchagent_restart_check" + skipPendingTaskCheck
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
-        result = proc.stdout.read().rstrip()
-        if result != "RESTARTCHECK succeeded":
+        (out, err) = proc.communicate()
+        if proc.returncode != 0:
             if enforce_check:
                 click.echo("Orchagent is not in clean state, check syslog and try later")
-                sys.exit(1)
+                sys.exit(proc.returncode)
             else:
                 click.echo("Orchagent is not in clean state, upgrading it anyway")
         else:
