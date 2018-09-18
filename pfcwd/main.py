@@ -198,7 +198,8 @@ def start_default():
     configdb.connect()
     enable = configdb.get_entry('DEVICE_METADATA', 'localhost').get('default_pfcwd_status')
 
-    all_ports = get_all_ports(configdb)
+    # Get active ports from Config DB
+    active_ports = natsorted(configdb.get_table('DEVICE_NEIGHBOR').keys())
 
     if not enable or enable.lower() != "enable":
        return
@@ -213,7 +214,7 @@ def start_default():
         'action': DEFAULT_ACTION
     }
 
-    for port in all_ports:
+    for port in active_ports:
         configdb.set_entry("PFC_WD_TABLE", port, pfcwd_info)
 
     pfcwd_info = {}

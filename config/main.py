@@ -77,7 +77,7 @@ def set_interface_mode(mode):
     """Modify SONIC_CLI_IFACE_MODE env variable in user .bashrc
     """
     user = os.getenv('SUDO_USER')
-    bashrc_ifacemode_line = "SONIC_CLI_IFACE_MODE={}".format(mode)
+    bashrc_ifacemode_line = "export SONIC_CLI_IFACE_MODE={}".format(mode)
 
     if not user:
         user = os.getenv('USER')
@@ -95,7 +95,7 @@ def set_interface_mode(mode):
         newdata = filedata + bashrc_ifacemode_line
         newdata += "\n"
     else:
-        newdata = re.sub(r"SONIC_CLI_IFACE_MODE=\w+",
+        newdata = re.sub(r"export SONIC_CLI_IFACE_MODE=\w+",
                          bashrc_ifacemode_line, filedata)
     f = open(bashrc, 'w')
     f.write(newdata)
@@ -353,11 +353,11 @@ def mirror_session():
 @click.argument('session_name', metavar='<session_name>', required=True)
 @click.argument('src_ip', metavar='<src_ip>', required=True)
 @click.argument('dst_ip', metavar='<dst_ip>', required=True)
-@click.argument('gre_type', metavar='<gre_type>', required=True)
 @click.argument('dscp', metavar='<dscp>', required=True)
 @click.argument('ttl', metavar='<ttl>', required=True)
-@click.argument('queue', metavar='<queue>', required=True)
-def add(session_name, src_ip, dst_ip, gre_type, dscp, ttl, queue):
+@click.argument('gre_type', metavar='[gre_type]', required=False)
+@click.argument('queue', metavar='[queue]', required=False)
+def add(session_name, src_ip, dst_ip, dscp, ttl, gre_type, queue):
     """
     Add mirror session
     """
@@ -367,11 +367,15 @@ def add(session_name, src_ip, dst_ip, gre_type, dscp, ttl, queue):
     session_info = {
             "src_ip": src_ip,
             "dst_ip": dst_ip,
-            "gre_type": gre_type,
             "dscp": dscp,
-            "ttl": ttl,
-            "queue": queue
+            "ttl": ttl
             }
+
+    if gre_type is not None:
+        session_info['gre_type'] = gre_type
+
+    if queue is not None:
+        session_info['queue'] = queue
 
     config_db.set_entry("MIRROR_SESSION", session_name, session_info)
 
@@ -409,8 +413,9 @@ def reload():
         run_command(command, display_cmd=True)
 
         qos_template_file = os.path.join('/usr/share/sonic/device/', platform, hwsku, 'qos.json.j2')
+        sonic_version_file = os.path.join('/etc/sonic/', 'sonic_version.yml')
         if os.path.isfile(qos_template_file):
-            command = "{} -m -t {} >/tmp/qos.json".format(SONIC_CFGGEN_PATH, qos_template_file)
+            command = "{} -m -t {} -y {} >/tmp/qos.json".format(SONIC_CFGGEN_PATH, qos_template_file, sonic_version_file)
             run_command(command, display_cmd=True)
 
             # Apply the configurations only when both buffer and qos configuration files are presented
@@ -641,64 +646,112 @@ def neighbor(ipaddr_or_hostname, verbose):
 #
 
 @cli.group()
-def interface():
-    """Interface-related configuration tasks"""
-    pass
-
-#
-# 'shutdown' subcommand
-#
-
-@interface.command()
 @click.argument('interface_name', metavar='<interface_name>', required=True)
-@click.option('-v', '--verbose', is_flag=True, help="Enable verbose output")
-def shutdown(interface_name, verbose):
-    """Shut down interface"""
+@click.pass_context
+def interface(ctx, interface_name):
+    """Interface-related configuration tasks"""
+    config_db = ConfigDBConnector()
+    config_db.connect()
+    ctx.obj = {}
+    ctx.obj['config_db'] = config_db
     if get_interface_mode() == "alias":
-        interface_name = interface_alias_to_name(interface_name)
-        if interface_name is None:
+        ctx.obj['interface_name'] = interface_alias_to_name(interface_name)
+        if ctx.obj['interface_name'] is None:
             raise click.Abort()
-
-    command = "ip link set {} down".format(interface_name)
-    run_command(command, display_cmd=verbose)
+    else:
+        ctx.obj['interface_name'] = interface_name
 
 #
 # 'startup' subcommand
 #
 
 @interface.command()
-@click.argument('interface_name', metavar='<interface_name>', required=True)
-@click.option('-v', '--verbose', is_flag=True, help="Enable verbose output")
-def startup(interface_name, verbose):
+@click.pass_context
+def startup(ctx):
     """Start up interface"""
-    if get_interface_mode() == "alias":
-        interface_name = interface_alias_to_name(interface_name)
-        if interface_name is None:
-            raise click.Abort()
+    config_db = ctx.obj['config_db']
+    interface_name = ctx.obj['interface_name']
 
+    if interface_name.startswith("Ethernet"):
+        config_db.set_entry("PORT", interface_name, {"admin_status": "up"})
+    elif interface_name.startswith("PortChannel"):
+        config_db.set_entry("PORTCHANNEL", interface_name, {"admin_status": "up"})
+#
+# 'shutdown' subcommand
+#
 
-    command = "ip link set {} up".format(interface_name)
-    run_command(command, display_cmd=verbose)
+@interface.command()
+@click.pass_context
+def shutdown(ctx):
+    """Shut down interface"""
+    config_db = ctx.obj['config_db']
+    interface_name = ctx.obj['interface_name']
+
+    if interface_name.startswith("Ethernet"):
+        config_db.set_entry("PORT", interface_name, {"admin_status": "down"})
+    elif interface_name.startswith("PortChannel"):
+        config_db.set_entry("PORTCHANNEL", interface_name, {"admin_status": "down"})
 
 #
 # 'speed' subcommand
 #
 
 @interface.command()
-@click.argument('interface_name', metavar='<interface_name>', required=True)
+@click.pass_context
 @click.argument('interface_speed', metavar='<interface_speed>', required=True)
 @click.option('-v', '--verbose', is_flag=True, help="Enable verbose output")
-def speed(interface_name, interface_speed, verbose):
+def speed(ctx, verbose):
     """Set interface speed"""
-    if get_interface_mode() == "alias":
-        interface_name = interface_alias_to_name(interface_name)
-        if interface_name is None:
-            raise click.Abort()
+    interface_name = ctx.obj['interface_name']
 
     command = "portconfig -p {} -s {}".format(interface_name, interface_speed)
-    if verbose: command += " -vv"
+    if verbose:
+        command += " -vv"
     run_command(command, display_cmd=verbose)
 
+#
+# 'ip' subgroup
+#
+
+@interface.group()
+@click.pass_context
+def ip(ctx):
+    """Add or remove IP address"""
+    pass
+
+#
+# 'add' subcommand
+#
+
+@ip.command()
+@click.argument("ip_addr", metavar="<ip_addr>", required=True)
+@click.pass_context
+def add(ctx, ip_addr):
+    """Add an IP address towards the interface"""
+    config_db = ctx.obj["config_db"]
+    interface_name = ctx.obj["interface_name"]
+
+    if interface_name.startswith("Ethernet"):
+        config_db.set_entry("INTERFACE", (interface_name, ip_addr), {"NULL": "NULL"})
+    elif interface_name.startswith("PortChannel"):
+        config_db.set_entry("PORTCHANNEL_INTERFACE", (interface_name, ip_addr), {"NULL": "NULL"})
+
+#
+# 'del' subcommand
+#
+
+@ip.command()
+@click.argument("ip_addr", metavar="<ip_addr>", required=True)
+@click.pass_context
+def remove(ctx, ip_addr):
+    """Remove an IP address from the interface"""
+    config_db = ctx.obj["config_db"]
+    interface_name = ctx.obj["interface_name"]
+
+    if interface_name.startswith("Ethernet"):
+        config_db.set_entry("INTERFACE", (interface_name, ip_addr), None)
+    elif interface_name.startswith("PortChannel"):
+        config_db.set_entry("PORTCHANNEL_INTERFACE", (interface_name, ip_addr), None)
 #
 # 'acl' group
 #
