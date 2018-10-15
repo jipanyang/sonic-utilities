@@ -177,7 +177,7 @@ def remove_image(image):
 # and extract tag name from docker image file.
 def get_docker_tag_name(image):
     # Try to get tag name from label metadata
-    cmd = "docker inspect  --format '{{.ContainerConfig.Labels.Tag}}' " + image
+    cmd = "docker inspect --format '{{.ContainerConfig.Labels.Tag}}' " + image
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
     (out, err) = proc.communicate()
     if proc.returncode != 0:
@@ -414,8 +414,8 @@ def upgrade_docker(container_name, url, cleanup_image, enforce_check, tag):
             click.echo("Orchagent is in clean state and frozen for warm upgrade")
 
     run_command("systemctl stop %s" % container_name)
-    run_command("docker rm  %s " % container_name)
-    run_command("docker rmi  %s " % image_latest)
+    run_command("docker rm %s " % container_name)
+    run_command("docker rmi %s " % image_latest)
     run_command("docker load < %s" % image_path)
     if tag == None:
         # example image: docker-lldp-sv2:latest

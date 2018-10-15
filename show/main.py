@@ -1,16 +1,18 @@
 #! /usr/bin/python -u
 
-import click
 import errno
-import getpass
 import json
 import os
 import re
 import subprocess
 import sys
+
+import click
 from click_default_group import DefaultGroup
 from natsort import natsorted
 from tabulate import tabulate
+
+import sonic_platform
 from swsssdk import ConfigDBConnector
 from swsssdk import SonicV2Connector
 
@@ -878,25 +880,24 @@ platform.add_command(mlnx.mlnx)
 @platform.command()
 def summary():
     """Show hardware platform information"""
-    username = getpass.getuser()
+    machine_info = sonic_platform.get_machine_info()
+    platform = sonic_platform.get_platform_info(machine_info)
 
-    PLATFORM_TEMPLATE_FILE = "/tmp/cli_platform_{0}.j2".format(username)
-    PLATFORM_TEMPLATE_CONTENTS = "Platform: {{ DEVICE_METADATA.localhost.platform }}\n" \
-                                 "HwSKU: {{ DEVICE_METADATA.localhost.hwsku }}\n" \
-                                 "ASIC: {{ asic_type }}"
+    config_db = ConfigDBConnector()
+    config_db.connect()
+    data = config_db.get_table('DEVICE_METADATA')
 
-    # Create a temporary Jinja2 template file to use with sonic-cfggen
-    f = open(PLATFORM_TEMPLATE_FILE, 'w')
-    f.write(PLATFORM_TEMPLATE_CONTENTS)
-    f.close()
+    try:
+        hwsku = data['localhost']['hwsku']
+    except KeyError:
+        hwsku = "Unknown"
 
-    cmd = "sonic-cfggen -d -y /etc/sonic/sonic_version.yml -t {0}".format(PLATFORM_TEMPLATE_FILE)
-    p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE)
-    click.echo(p.stdout.read())
+    version_info = sonic_platform.get_sonic_version_info()
+    asic_type = version_info['asic_type']
 
-    # Clean up
-    os.remove(PLATFORM_TEMPLATE_FILE)
-
+    click.echo("Platform: {}".format(platform))
+    click.echo("HwSKU: {}".format(hwsku))
+    click.echo("ASIC: {}".format(asic_type))
 
 # 'syseeprom' subcommand ("show platform syseeprom")
 @platform.command()
@@ -955,32 +956,19 @@ def logging(process, lines, follow, verbose):
 @cli.command()
 def version():
     """Show version information"""
-    username = getpass.getuser()
+    version_info = sonic_platform.get_sonic_version_info()
 
-    VERSION_TEMPLATE_FILE = "/tmp/cli_version_{0}.j2".format(username)
-    VERSION_TEMPLATE_CONTENTS = "SONiC Software Version: SONiC.{{ build_version }}\n" \
-                                "Distribution: Debian {{ debian_version }}\n" \
-                                "Kernel: {{ kernel_version }}\n" \
-                                "Build commit: {{ commit_id }}\n" \
-                                "Build date: {{ build_date }}\n" \
-                                "Built by: {{ built_by }}"
+    click.echo("SONiC Software Version: SONiC.{}".format(version_info['build_version']))
+    click.echo("Distribution: Debian {}".format(version_info['debian_version']))
+    click.echo("Kernel: {}".format(version_info['kernel_version']))
+    click.echo("Build commit: {}".format(version_info['commit_id']))
+    click.echo("Build date: {}".format(version_info['build_date']))
+    click.echo("Built by: {}".format(version_info['built_by']))
 
-    # Create a temporary Jinja2 template file to use with sonic-cfggen
-    f = open(VERSION_TEMPLATE_FILE, 'w')
-    f.write(VERSION_TEMPLATE_CONTENTS)
-    f.close()
-
-    cmd = "sonic-cfggen -y /etc/sonic/sonic_version.yml -t {0}".format(VERSION_TEMPLATE_FILE)
-    p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE)
-    click.echo(p.stdout.read())
-
-    click.echo("Docker images:")
+    click.echo("\nDocker images:")
     cmd = 'sudo docker images --format "table {{.Repository}}\\t{{.Tag}}\\t{{.ID}}\\t{{.Size}}"'
     p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE)
     click.echo(p.stdout.read())
-
-    # Clean up
-    os.remove(VERSION_TEMPLATE_FILE)
 
 #
 # 'environment' command ("show environment")
@@ -1193,16 +1181,59 @@ def vlan():
 @click.option('--verbose', is_flag=True, help="Enable verbose output")
 def brief(verbose):
     """Show all bridge information"""
-    cmd = "sudo brctl show"
-    run_command(cmd, display_cmd=verbose)
+    config_db = ConfigDBConnector()
+    config_db.connect()
+    header = ['VLAN ID', 'IP Address', 'Ports', 'DHCP Helper Address']
+    body = []
+    vlan_keys = []
 
-@vlan.command()
-@click.argument('bridge_name', required=True)
-@click.option('--verbose', is_flag=True, help="Enable verbose output")
-def id(bridge_name, verbose):
-    """Show list of learned MAC addresses for particular bridge"""
-    cmd = "sudo brctl showmacs {}".format(bridge_name)
-    run_command(cmd, display_cmd=verbose)
+    # Fetching data from config_db for VLAN, VLAN_INTERFACE and VLAN_MEMBER
+    vlan_dhcp_helper_data = config_db.get_table('VLAN')
+    vlan_ip_data = config_db.get_table('VLAN_INTERFACE')
+    vlan_ports_data = config_db.get_table('VLAN_MEMBER')
+
+    vlan_keys = natsorted(vlan_dhcp_helper_data.keys())
+
+    # Defining dictionaries for DHCP Helper address, Interface Gateway IP and VLAN ports
+    vlan_dhcp_helper_dict = {}
+    vlan_ip_dict = {}
+    vlan_ports_dict = {}
+
+    # Parsing DHCP Helpers info
+    for key in natsorted(vlan_dhcp_helper_data.keys()):
+        try:
+            if vlan_dhcp_helper_data[key]['dhcp_servers']:
+                vlan_dhcp_helper_dict[str(key.strip('Vlan'))] = vlan_dhcp_helper_data[key]['dhcp_servers']
+        except KeyError:
+            vlan_dhcp_helper_dict[str(key.strip('Vlan'))] = " "
+            pass
+
+    # Parsing VLAN Gateway info
+    for key in natsorted(vlan_ip_data.keys()):
+        interface_key = str(key[0].strip("Vlan"))
+        interface_value = str(key[1])
+        if interface_key in vlan_ip_dict:
+            vlan_ip_dict[interface_key].append(interface_value)
+        else:
+            vlan_ip_dict[interface_key] = [interface_value]
+
+    # Parsing VLAN Ports info
+    for key in natsorted(vlan_ports_data.keys()):
+        ports_key = str(key[0].strip("Vlan"))
+        ports_value = str(key[1])
+        if ports_key in vlan_ports_dict:
+            vlan_ports_dict[ports_key].append(ports_value)
+        else:
+            vlan_ports_dict[ports_key] = [ports_value]
+
+    # Printing the following dictionaries in tablular forms:
+    # vlan_dhcp_helper_dict={}, vlan_ip_dict = {}, vlan_ports_dict = {}
+    for key in natsorted(vlan_dhcp_helper_dict.keys()):
+        dhcp_helpers = ','.replace(',', '\n').join(vlan_dhcp_helper_dict[key])
+        ip_address = ','.replace(',', '\n').join(vlan_ip_dict[key])
+        vlan_ports = ','.replace(',', '\n').join((vlan_ports_dict[key]))
+        body.append([key, ip_address, vlan_ports, dhcp_helpers])
+    click.echo(tabulate(body, header, tablefmt="grid"))
 
 @vlan.command()
 @click.option('-s', '--redis-unix-socket-path', help='unix socket path for redis connection')
@@ -1386,6 +1417,16 @@ def table(table_name, verbose):
 def ecn():
     """Show ECN configuration"""
     cmd = "ecnconfig -l"
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
+    click.echo(proc.stdout.read())
+
+
+# 'mmu' command ("show mmu")
+#
+@cli.command('mmu')
+def mmu():
+    """Show mmu configuration"""
+    cmd = "mmuconfig -l"
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
     click.echo(proc.stdout.read())
 
