@@ -54,6 +54,7 @@ setup(
         'scripts/generate_dump',
         'scripts/intfutil',
         'scripts/lldpshow',
+        'scripts/nbrshow',
         'scripts/pcmping',
         'scripts/port2alias',
         'scripts/portconfig',
@@ -63,6 +64,7 @@ setup(
         'scripts/reboot',
         'scripts/teamshow',
         'scripts/nbrshow',
+        'scripts/warm-reboot',
     ],
     data_files=[
         ('/etc/bash_completion.d', glob.glob('data/etc/bash_completion.d/*')),
@@ -70,7 +72,7 @@ setup(
     entry_points={
         'console_scripts': [
             'acl-loader = acl_loader.main:cli',
-            'config = config.main:cli',
+            'config = config.main:config',
             'connect = connect.main:connect',
             'consutil = consutil.main:consutil',
             'counterpoll = counterpoll.main:cli',
