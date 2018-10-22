@@ -934,7 +934,8 @@ def asymmetric(ctx, status):
 def platform():
     """Platform-related configuration tasks"""
 
-if (sonic_platform.get_sonic_version_info()['asic_type'] == 'mellanox'):
+version_info = sonic_platform.get_sonic_version_info()
+if (version_info and version_info.get('asic_type') == 'mellanox'):
     platform.add_command(mlnx.mlnx)
 
 
