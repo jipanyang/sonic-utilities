@@ -658,6 +658,27 @@ def naming_mode(verbose):
 
 
 #
+# 'watermark' group ("show watermark telemetry interval")
+#
+
+@cli.group(cls=AliasedGroup, default_if_no_args=False)
+def watermark():
+    """Show details of watermark """
+    pass
+
+@watermark.group()
+def telemetry():
+    """Show watermark telemetry info"""
+    pass
+
+@telemetry.command('interval')
+def show_tm_interval():
+    """Show telemetry interval"""
+    command = 'watermarkcfg --show-interval'
+    run_command(command)
+
+
+#
 # 'queue' group ("show queue ...")
 #
 
@@ -687,6 +708,86 @@ def counters(interfacename, clear, verbose):
             cmd += " -p {}".format(interfacename)
 
     run_command(cmd, display_cmd=verbose)
+
+# watermarks subcommands ("show queue watermarks|persistent-watermarks")
+
+@queue.group()
+def watermark():
+    """Show queue user WM"""
+    pass
+
+@watermark.command('unicast')
+def wm_q_uni():
+    """Show user WM for unicast queues"""
+    command = 'watermarkstat -t q_shared_uni'
+    run_command(command)
+
+@watermark.command('multicast')
+def wm_q_multi():
+    """Show user WM for multicast queues"""
+    command = 'watermarkstat -t q_shared_multi'
+    run_command(command)
+
+@queue.group(name='persistent-watermark')
+def persistent_watermark():
+    """Show queue persistent WM"""
+    pass
+
+@persistent_watermark.command('unicast')
+def pwm_q_uni():
+    """Show persistent WM for persistent queues"""
+    command = 'watermarkstat -p -t q_shared_uni'
+    run_command(command)
+
+@persistent_watermark.command('multicast')
+def pwm_q_multi():
+    """Show persistent WM for multicast queues"""
+    command = 'watermarkstat -p -t q_shared_multi'
+    run_command(command)
+
+
+#
+# 'priority-group' group ("show priority-group ...")
+#
+
+@cli.group(name='priority-group', cls=AliasedGroup, default_if_no_args=False)
+def priority_group():
+    """Show details of the PGs """
+
+
+@priority_group.group()
+def watermark():
+    """Show priority_group user WM"""
+    pass
+
+@watermark.command('headroom')
+def wm_pg_headroom():
+    """Show user headroom WM for pg"""
+    command = 'watermarkstat -t pg_headroom'
+    run_command(command)
+
+@watermark.command('shared')
+def wm_pg_shared():
+    """Show user shared WM for pg"""
+    command = 'watermarkstat -t pg_shared'
+    run_command(command)
+
+@priority_group.group(name='persistent-watermark')
+def persistent_watermark():
+    """Show queue persistent WM"""
+    pass
+
+@persistent_watermark.command('headroom')
+def pwm_pg_headroom():
+    """Show persistent headroom WM for pg"""
+    command = 'watermarkstat -p -t pg_headroom'
+    run_command(command)
+
+@persistent_watermark.command('shared')
+def pwm_pg_shared():
+    """Show persistent shared WM for pg"""
+    command = 'watermarkstat -p -t pg_shared'
+    run_command(command)
 
 #
 # 'pfc' group ###
@@ -1145,7 +1246,7 @@ def bgp(verbose):
 @click.option('--verbose', is_flag=True, help="Enable verbose output")
 def ntp(verbose):
     """Show NTP information"""
-    cmd = "ntpq -p"
+    cmd = "ntpq -p -n"
     run_command(cmd, display_cmd=verbose)
 
 
@@ -1185,7 +1286,7 @@ def brief(verbose):
     """Show all bridge information"""
     config_db = ConfigDBConnector()
     config_db.connect()
-    header = ['VLAN ID', 'IP Address', 'Ports', 'DHCP Helper Address']
+    header = ['VLAN ID', 'IP Address', 'Ports', 'Port Tagging', 'DHCP Helper Address']
     body = []
     vlan_keys = []
 
@@ -1196,10 +1297,12 @@ def brief(verbose):
 
     vlan_keys = natsorted(vlan_dhcp_helper_data.keys())
 
-    # Defining dictionaries for DHCP Helper address, Interface Gateway IP and VLAN ports
+    # Defining dictionaries for DHCP Helper address, Interface Gateway IP,
+    # VLAN ports and port tagging
     vlan_dhcp_helper_dict = {}
     vlan_ip_dict = {}
     vlan_ports_dict = {}
+    vlan_tagging_dict = {}
 
     # Parsing DHCP Helpers info
     for key in natsorted(vlan_dhcp_helper_data.keys()):
@@ -1223,18 +1326,37 @@ def brief(verbose):
     for key in natsorted(vlan_ports_data.keys()):
         ports_key = str(key[0].strip("Vlan"))
         ports_value = str(key[1])
+        ports_tagging = vlan_ports_data[key]['tagging_mode']
         if ports_key in vlan_ports_dict:
             vlan_ports_dict[ports_key].append(ports_value)
         else:
             vlan_ports_dict[ports_key] = [ports_value]
+        if ports_key in vlan_tagging_dict:
+            vlan_tagging_dict[ports_key].append(ports_tagging)
+        else:
+            vlan_tagging_dict[ports_key] = [ports_tagging]
 
     # Printing the following dictionaries in tablular forms:
     # vlan_dhcp_helper_dict={}, vlan_ip_dict = {}, vlan_ports_dict = {}
+    # vlan_tagging_dict = {}
     for key in natsorted(vlan_dhcp_helper_dict.keys()):
-        dhcp_helpers = ','.replace(',', '\n').join(vlan_dhcp_helper_dict[key])
-        ip_address = ','.replace(',', '\n').join(vlan_ip_dict[key])
-        vlan_ports = ','.replace(',', '\n').join((vlan_ports_dict[key]))
-        body.append([key, ip_address, vlan_ports, dhcp_helpers])
+        if key not in vlan_ip_dict:
+            ip_address = ""
+        else:
+            ip_address = ','.replace(',', '\n').join(vlan_ip_dict[key])
+        if key not in vlan_ports_dict:
+            vlan_ports = ""
+        else:
+            vlan_ports = ','.replace(',', '\n').join((vlan_ports_dict[key]))
+        if key not in vlan_dhcp_helper_dict:
+            dhcp_helpers = ""
+        else:
+            dhcp_helpers = ','.replace(',', '\n').join(vlan_dhcp_helper_dict[key])
+        if key not in vlan_tagging_dict:
+            vlan_tagging = ""
+        else:
+            vlan_tagging = ','.replace(',', '\n').join((vlan_tagging_dict[key]))
+        body.append([key, ip_address, vlan_ports, vlan_tagging, dhcp_helpers])
     click.echo(tabulate(body, header, tablefmt="grid"))
 
 @vlan.command()

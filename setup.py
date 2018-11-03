@@ -65,6 +65,8 @@ setup(
         'scripts/teamshow',
         'scripts/nbrshow',
         'scripts/warm-reboot',
+        'scripts/watermarkstat',
+        'scripts/watermarkcfg'
     ],
     data_files=[
         ('/etc/bash_completion.d', glob.glob('data/etc/bash_completion.d/*')),

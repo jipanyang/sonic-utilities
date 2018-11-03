@@ -749,9 +749,9 @@ def startup(ctx):
     interface_name = ctx.obj['interface_name']
 
     if interface_name.startswith("Ethernet"):
-        config_db.set_entry("PORT", interface_name, {"admin_status": "up"})
+        config_db.mod_entry("PORT", interface_name, {"admin_status": "up"})
     elif interface_name.startswith("PortChannel"):
-        config_db.set_entry("PORTCHANNEL", interface_name, {"admin_status": "up"})
+        config_db.mod_entry("PORTCHANNEL", interface_name, {"admin_status": "up"})
 #
 # 'shutdown' subcommand
 #
@@ -764,9 +764,9 @@ def shutdown(ctx):
     interface_name = ctx.obj['interface_name']
 
     if interface_name.startswith("Ethernet"):
-        config_db.set_entry("PORT", interface_name, {"admin_status": "down"})
+        config_db.mod_entry("PORT", interface_name, {"admin_status": "down"})
     elif interface_name.startswith("PortChannel"):
-        config_db.set_entry("PORTCHANNEL", interface_name, {"admin_status": "down"})
+        config_db.mod_entry("PORTCHANNEL", interface_name, {"admin_status": "down"})
 
 #
 # 'speed' subcommand
@@ -938,6 +938,27 @@ version_info = sonic_platform.get_sonic_version_info()
 if (version_info and version_info.get('asic_type') == 'mellanox'):
     platform.add_command(mlnx.mlnx)
 
+#
+# 'watermark' group ("show watermark telemetry interval")
+#
+
+@config.group()
+def watermark():
+    """Configure watermark """
+    pass
+
+@watermark.group()
+def telemetry():
+    """Configure watermark telemetry"""
+    pass
+
+@telemetry.command()
+@click.argument('interval', required=True)
+def interval(interval):
+    """Configure watermark telemetry interval"""
+    command = 'watermarkcfg --config-interval ' + interval
+    run_command(command)
+   
 
 #
 # 'interface_naming_mode' subgroup ('config interface_naming_mode ...')
