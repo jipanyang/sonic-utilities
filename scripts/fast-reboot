@@ -95,16 +95,26 @@ if [[ "$REBOOT_TYPE" = "warm-reboot" ]]; then
 fi
 
 # Kill bgpd to start the bgp graceful restart procedure
-docker exec -i bgp killall -9 zebra
-docker exec -i bgp killall -9 bgpd
+docker exec -i bgp pkill -9 zebra
+docker exec -i bgp pkill -9 bgpd
 
 # Kill lldp, otherwise it sends informotion about reboot
 docker kill lldp > /dev/null
 
-# Kill teamd, otherwise it gets down all LAGs
-# Note: teamd must be killed before syncd, because it will send the last packet through CPU port
-# TODO: stop teamd gracefully to allow teamd to send last valid update to be sure we'll have 90 seconds reboot time
-docker kill teamd > /dev/null
+# Stop teamd gracefully
+if [[ "$REBOOT_TYPE" = "warm-reboot" ]]; then
+    # Send USR1 signal to all teamd instances to stop them
+    # It will prepare teamd for warm-reboot
+    # Note: We must send USR1 signal before syncd, because it will send the last packet through CPU port
+    docker exec -i teamd pkill -USR1 teamd > /dev/null
+fi
+
+if [[ "$REBOOT_TYPE" = "fast-reboot" ]]; then
+    # Kill teamd, otherwise it gets down all LAGs
+    # Note: teamd must be killed before syncd, because it will send the last packet through CPU port
+    # TODO: stop teamd gracefully to allow teamd to send last valid update to be sure we'll have 90 seconds reboot time
+    docker kill teamd > /dev/null
+fi
 
 # Kill swss dockers
 docker kill swss
@@ -130,6 +140,8 @@ if [[ "$REBOOT_TYPE" = "warm-reboot" ]]; then
     $DUMP_CMD -d 6 -k "[FW][DA][BR][_M][T_][AR][BE][LS][ET][|A]*" -o $WARM_DIR/state_db.json
     # Save asicDB in /host/warm-reboot/asic_db.json
     $DUMP_CMD -d 1 -o $WARM_DIR/asic_db.json
+    # Save loglevelDB in /host/warm-reboot/loglevel_db.json
+    $DUMP_CMD -d 3 -o $WARM_DIR/loglevel_db.json
 fi
 
 if [[ "$REBOOT_TYPE" = "warm-reboot" ]]; then
