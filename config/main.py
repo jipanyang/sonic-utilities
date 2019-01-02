@@ -7,6 +7,7 @@ import json
 import subprocess
 import netaddr
 import re
+import syslog
 
 import sonic_platform
 from swsssdk import ConfigDBConnector
@@ -16,7 +17,33 @@ from minigraph import parse_device_desc_xml
 import aaa
 import mlnx
 
-SONIC_CFGGEN_PATH = "sonic-cfggen"
+SONIC_CFGGEN_PATH = '/usr/local/bin/sonic-cfggen'
+SYSLOG_IDENTIFIER = "config"
+
+# ========================== Syslog wrappers ==========================
+
+def log_debug(msg):
+    syslog.openlog(SYSLOG_IDENTIFIER)
+    syslog.syslog(syslog.LOG_DEBUG, msg)
+    syslog.closelog()
+
+
+def log_info(msg):
+    syslog.openlog(SYSLOG_IDENTIFIER)
+    syslog.syslog(syslog.LOG_INFO, msg)
+    syslog.closelog()
+
+
+def log_warning(msg):
+    syslog.openlog(SYSLOG_IDENTIFIER)
+    syslog.syslog(syslog.LOG_WARNING, msg)
+    syslog.closelog()
+
+
+def log_error(msg):
+    syslog.openlog(SYSLOG_IDENTIFIER)
+    syslog.syslog(syslog.LOG_ERR, msg)
+    syslog.closelog()
 
 #
 # Helper functions
@@ -42,13 +69,14 @@ def run_command(command, display_cmd=False, ignore_error=False):
 def interface_alias_to_name(interface_alias):
     """Return default interface name if alias name is given as argument
     """
-
-    cmd = 'sonic-cfggen -d --var-json "PORT"'
-    p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE)
-
-    port_dict = json.loads(p.stdout.read())
+    config_db = ConfigDBConnector()
+    config_db.connect()
+    port_dict = config_db.get_table('PORT')
 
     if interface_alias is not None:
+        if not port_dict:
+            click.echo("port_dict is None!")
+            raise click.Abort()
         for port_name in natsorted(port_dict.keys()):
             if interface_alias == port_dict[port_name]['alias']:
                 return port_name
@@ -60,13 +88,14 @@ def interface_alias_to_name(interface_alias):
 def interface_name_to_alias(interface_name):
     """Return alias interface name if default name is given as argument
     """
-
-    cmd = 'sonic-cfggen -d --var-json "PORT"'
-    p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE)
-
-    port_dict = json.loads(p.stdout.read())
+    config_db = ConfigDBConnector()
+    config_db.connect()
+    port_dict = config_db.get_table('PORT')
 
     if interface_name is not None:
+        if not port_dict:
+            click.echo("port_dict is None!")
+            raise click.Abort()
         for port_name in natsorted(port_dict.keys()):
             if interface_name == port_name:
                 return port_dict[port_name]['alias']
@@ -80,6 +109,23 @@ def set_interface_naming_mode(mode):
     """
     user = os.getenv('SUDO_USER')
     bashrc_ifacemode_line = "export SONIC_CLI_IFACE_MODE={}".format(mode)
+
+    # Ensure all interfaces have an 'alias' key in PORT dict
+    config_db = ConfigDBConnector()
+    config_db.connect()
+    port_dict = config_db.get_table('PORT')
+
+    if not port_dict:
+        click.echo("port_dict is None!")
+        raise click.Abort()
+
+    for port_name in port_dict.keys():
+        try:
+            if port_dict[port_name]['alias']:
+                pass
+        except KeyError:
+            click.echo("Platform does not support alias mapping")
+            raise click.Abort()
 
     if not user:
         user = os.getenv('USER')
@@ -227,7 +273,11 @@ def _stop_services():
         'teamd',
     ]
     for service in services:
-        run_command("systemctl stop %s" % service, display_cmd=True)
+        try:
+            run_command("systemctl stop %s" % service, display_cmd=True)
+        except SystemExit as e:
+            log_error("Stopping {} failed with error {}".format(service, e))
+            raise
 
 def _restart_services():
     services = [
@@ -244,8 +294,11 @@ def _restart_services():
         'dhcp_relay',
     ]
     for service in services:
-        run_command("systemctl restart %s" % service, display_cmd=True)
-
+        try:
+            run_command("systemctl restart %s" % service, display_cmd=True)
+        except SystemExit as e:
+            log_error("Restart {} failed with error {}".format(service, e))
+            raise
 
 # This is our main entrypoint - the main 'config' command
 @click.group()
@@ -283,6 +336,8 @@ def reload(filename, yes, load_sysinfo):
     """Clear current configuration and import a previous saved config DB dump file."""
     if not yes:
         click.confirm('Clear current config and reload config from the file %s?' % filename, abort=True)
+
+    log_info("'reload' executing...")
 
     if load_sysinfo:
         command = "{} -j {} -v DEVICE_METADATA.localhost.hwsku".format(SONIC_CFGGEN_PATH, filename)
@@ -338,6 +393,8 @@ def load_mgmt_config(filename):
                 expose_value=False, prompt='Reload config from minigraph?')
 def load_minigraph():
     """Reconfigure based on minigraph."""
+    log_info("'load_minigraph' executing...")
+
     #Stop services before config push
     _stop_services()
 
@@ -488,13 +545,13 @@ def reload():
     hwsku = _get_hwsku()
     buffer_template_file = os.path.join('/usr/share/sonic/device/', platform, hwsku, 'buffers.json.j2')
     if os.path.isfile(buffer_template_file):
-        command = "{} -m -t {} >/tmp/buffers.json".format(SONIC_CFGGEN_PATH, buffer_template_file)
+        command = "{} -d -t {} >/tmp/buffers.json".format(SONIC_CFGGEN_PATH, buffer_template_file)
         run_command(command, display_cmd=True)
 
         qos_template_file = os.path.join('/usr/share/sonic/device/', platform, hwsku, 'qos.json.j2')
         sonic_version_file = os.path.join('/etc/sonic/', 'sonic_version.yml')
         if os.path.isfile(qos_template_file):
-            command = "{} -m -t {} -y {} >/tmp/qos.json".format(SONIC_CFGGEN_PATH, qos_template_file, sonic_version_file)
+            command = "{} -d -t {} -y {} >/tmp/qos.json".format(SONIC_CFGGEN_PATH, qos_template_file, sonic_version_file)
             run_command(command, display_cmd=True)
 
             # Apply the configurations only when both buffer and qos configuration files are presented
@@ -524,14 +581,14 @@ def warm_restart(ctx, redis_unix_socket_path):
     pass
 
 @warm_restart.command('enable')
-@click.argument('module', metavar='<module>', default='system', required=False, type=click.Choice(["system", "swss"]))
+@click.argument('module', metavar='<module>', default='system', required=False, type=click.Choice(["system", "swss", "bgp", "teamd"]))
 @click.pass_context
 def warm_restart_enable(ctx, module):
     db = ctx.obj['db']
     db.mod_entry('WARM_RESTART', module, {'enable': 'true'})
 
 @warm_restart.command('disable')
-@click.argument('module', metavar='<module>', default='system', required=False, type=click.Choice(["system", "swss"]))
+@click.argument('module', metavar='<module>', default='system', required=False, type=click.Choice(["system", "swss", "bgp", "teamd"]))
 @click.pass_context
 def warm_restart_enable(ctx, module):
     db = ctx.obj['db']
@@ -545,6 +602,24 @@ def warm_restart_neighsyncd_timer(ctx, seconds):
     if seconds not in range(1,9999):
         ctx.fail("neighsyncd warm restart timer must be in range 1-9999")
     db.mod_entry('WARM_RESTART', 'swss', {'neighsyncd_timer': seconds})
+
+@warm_restart.command('bgp_timer')
+@click.argument('seconds', metavar='<seconds>', required=True, type=int)
+@click.pass_context
+def warm_restart_bgp_timer(ctx, seconds):
+    db = ctx.obj['db']
+    if seconds not in range(1,3600):
+        ctx.fail("bgp warm restart timer must be in range 1-3600")
+    db.mod_entry('WARM_RESTART', 'bgp', {'bgp_timer': seconds})
+
+@warm_restart.command('teamsyncd_timer')
+@click.argument('seconds', metavar='<seconds>', required=True, type=int)
+@click.pass_context
+def warm_restart_teamsyncd_timer(ctx, seconds):
+    db = ctx.obj['db']
+    if seconds not in range(1,3600):
+        ctx.fail("teamsyncd warm restart timer must be in range 1-3600")
+    db.mod_entry('WARM_RESTART', 'teamd', {'teamsyncd_timer': seconds})
 
 #
 # 'vlan' group ('config vlan ...')
@@ -776,7 +851,7 @@ def shutdown(ctx):
 @click.pass_context
 @click.argument('interface_speed', metavar='<interface_speed>', required=True)
 @click.option('-v', '--verbose', is_flag=True, help="Enable verbose output")
-def speed(ctx, verbose):
+def speed(ctx, interface_speed, verbose):
     """Set interface speed"""
     interface_name = ctx.obj['interface_name']
 

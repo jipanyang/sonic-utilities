@@ -2,6 +2,8 @@
 
 import errno
 import json
+import netaddr
+import netifaces
 import os
 import re
 import subprocess
@@ -17,6 +19,8 @@ from swsssdk import ConfigDBConnector
 from swsssdk import SonicV2Connector
 
 import mlnx
+
+SONIC_CFGGEN_PATH = '/usr/local/bin/sonic-cfggen'
 
 try:
     # noinspection PyPep8Naming
@@ -43,21 +47,28 @@ class Config(object):
         except configparser.NoSectionError:
             pass
 
-
 class InterfaceAliasConverter(object):
     """Class which handles conversion between interface name and alias"""
 
     def __init__(self):
         self.alias_max_length = 0
-        cmd = 'sonic-cfggen -d --var-json "PORT"'
-        p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE)
-        self.port_dict = json.loads(p.stdout.read())
+
+        config_db = ConfigDBConnector()
+        config_db.connect()
+        self.port_dict = config_db.get_table('PORT')
+
+        if not self.port_dict:
+            click.echo("port_dict is None!")
+            raise click.Abort()
 
         for port_name in self.port_dict.keys():
-            if self.alias_max_length < len(
-                    self.port_dict[port_name]['alias']):
-               self.alias_max_length = len(
-                    self.port_dict[port_name]['alias'])
+            try:
+                if self.alias_max_length < len(
+                        self.port_dict[port_name]['alias']):
+                   self.alias_max_length = len(
+                        self.port_dict[port_name]['alias'])
+            except KeyError:
+                break
 
     def name_to_alias(self, interface_name):
         """Return vendor interface alias if SONiC
@@ -399,43 +410,6 @@ def interfaces():
     """Show details of the network interfaces"""
     pass
 
-# 'alias' subcommand ("show interfaces alias")
-@interfaces.command()
-@click.argument('interfacename', required=False)
-def alias(interfacename):
-    """Show Interface Name/Alias Mapping"""
-
-    cmd = 'sonic-cfggen -d --var-json "PORT"'
-    p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE)
-
-    port_dict = json.loads(p.stdout.read())
-
-    header = ['Name', 'Alias']
-    body = []
-
-    if interfacename is not None:
-        if get_interface_mode() == "alias":
-            interfacename = iface_alias_converter.alias_to_name(interfacename)
-
-        # If we're given an interface name, output name and alias for that interface only
-        if interfacename in port_dict:
-            if 'alias' in port_dict[interfacename]:
-                body.append([interfacename, port_dict[interfacename]['alias']])
-            else:
-                body.append([interfacename, interfacename])
-        else:
-            click.echo("Invalid interface name, '{0}'".format(interfacename))
-            return
-    else:
-        # Output name and alias for all interfaces
-        for port_name in natsorted(port_dict.keys()):
-            if 'alias' in port_dict[port_name]:
-                body.append([port_name, port_dict[port_name]['alias']])
-            else:
-                body.append([port_name, port_name])
-
-    click.echo(tabulate(body, header))
-
 #
 # 'neighbor' group ###
 #
@@ -483,23 +457,6 @@ def expected(interfacename):
                          neighbor_metadata_dict[device]['type']])
 
     click.echo(tabulate(body, header))
-
-# 'summary' subcommand ("show interfaces summary")
-@interfaces.command()
-@click.argument('interfacename', required=False)
-@click.option('--verbose', is_flag=True, help="Enable verbose output")
-def summary(interfacename, verbose):
-    """Show interface status and information"""
-
-    cmd = "/sbin/ifconfig"
-
-    if interfacename is not None:
-        if get_interface_mode() == "alias":
-            interfacename = iface_alias_converter.alias_to_name(interfacename)
-
-        cmd += " {}".format(interfacename)
-
-    run_command(cmd, display_cmd=verbose)
 
 
 @interfaces.group(cls=AliasedGroup, default_if_no_args=False)
@@ -839,10 +796,91 @@ def mac(vlan, port, verbose):
 #
 
 # This group houses IP (i.e., IPv4) commands and subgroups
-@cli.group()
+@cli.group(cls=AliasedGroup, default_if_no_args=False)
 def ip():
     """Show IP (IPv4) commands"""
     pass
+
+
+#
+# get_if_admin_state
+#
+# Given an interface name, return its admin state reported by the kernel.
+#
+def get_if_admin_state(iface):
+    admin_file = "/sys/class/net/{0}/flags"
+
+    try:
+        state_file = open(admin_file.format(iface), "r")
+    except IOError as e:
+        print "Error: unable to open file: %s" % str(e)
+        return "error"
+
+    content = state_file.readline().rstrip()
+    flags = int(content, 16)
+
+    if flags & 0x1:
+        return "up"
+    else:
+        return "down"
+
+
+#
+# get_if_oper_state
+#
+# Given an interface name, return its oper state reported by the kernel.
+#
+def get_if_oper_state(iface):
+    oper_file = "/sys/class/net/{0}/carrier"
+
+    try:
+        state_file = open(oper_file.format(iface), "r")
+    except IOError as e:
+        print "Error: unable to open file: %s" % str(e)
+        return "error"
+
+    oper_state = state_file.readline().rstrip()
+    if oper_state == "1":
+        return "up"
+    else:
+        return "down"
+
+
+#
+# 'show ip interfaces' command
+#
+# Display all interfaces with an IPv4 address and their admin/oper states.
+# Addresses from all scopes are included. Interfaces with no addresses are
+# excluded.
+#
+@ip.command()
+def interfaces():
+    """Show interfaces IPv4 address"""
+    header = ['Interface', 'IPv4 address/mask', 'Admin/Oper']
+    data = []
+
+    interfaces = natsorted(netifaces.interfaces())
+
+    for iface in interfaces:
+        ipaddresses = netifaces.ifaddresses(iface)
+
+        if netifaces.AF_INET in ipaddresses:
+            ifaddresses = []
+            for ipaddr in ipaddresses[netifaces.AF_INET]:
+                netmask = netaddr.IPAddress(ipaddr['netmask']).netmask_bits()
+                ifaddresses.append(["", str(ipaddr['addr']) + "/" + str(netmask)])
+
+            if len(ifaddresses) > 0:
+                admin = get_if_admin_state(iface)
+                if admin == "up":
+                    oper = get_if_oper_state(iface)
+                else:
+                    oper = "down"
+                data.append([iface, ifaddresses[0][1], admin + "/" + oper])
+            for ifaddr in ifaddresses[1:]:
+                data.append(["", ifaddr[1], ""])
+
+    print tabulate(data, header, tablefmt="simple", stralign='left', missingval="")
 
 
 #
@@ -877,10 +915,47 @@ def protocol(verbose):
 #
 
 # This group houses IPv6-related commands and subgroups
-@cli.group()
+@cli.group(cls=AliasedGroup, default_if_no_args=False)
 def ipv6():
     """Show IPv6 commands"""
     pass
+
+
+#
+# 'show ipv6 interfaces' command
+#
+# Display all interfaces with an IPv6 address and their admin/oper states.
+# Addresses from all scopes are included. Interfaces with no addresses are
+# excluded.
+#
+@ipv6.command()
+def interfaces():
+    """Show interfaces IPv6 address"""
+    header = ['Interface', 'IPv6 address/mask', 'Admin/Oper']
+    data = []
+
+    interfaces = natsorted(netifaces.interfaces())
+
+    for iface in interfaces:
+        ipaddresses = netifaces.ifaddresses(iface)
+
+        if netifaces.AF_INET6 in ipaddresses:
+            ifaddresses = []
+            for ipaddr in ipaddresses[netifaces.AF_INET6]:
+                netmask = ipaddr['netmask'].split('/', 1)[-1]
+                ifaddresses.append(["", str(ipaddr['addr']) + "/" + str(netmask)])
+
+            if len(ifaddresses) > 0:
+                admin = get_if_admin_state(iface)
+                if admin == "up":
+                    oper = get_if_oper_state(iface)
+                else:
+                    oper = "down"
+                data.append([iface, ifaddresses[0][1], admin + "/" + oper])
+            for ifaddr in ifaddresses[1:]:
+                data.append(["", ifaddr[1], ""])
+
+    print tabulate(data, header, tablefmt="simple", stralign='left', missingval="")
 
 
 #
@@ -1467,22 +1542,13 @@ def tacacs():
                 output += ('               %s %s\n' % (key, str(entry[key])))
     click.echo(output)
 
-
 #
-# 'mirror' group ###
+# 'mirror_session' command  ("show mirror_session ...")
 #
-
-@cli.group(cls=AliasedGroup, default_if_no_args=False)
-def mirror():
-    """Show mirroring (Everflow) information"""
-    pass
-
-
-# 'session' subcommand  ("show mirror session")
-@mirror.command()
+@cli.command()
 @click.argument('session_name', required=False)
 @click.option('--verbose', is_flag=True, help="Enable verbose output")
-def session(session_name, verbose):
+def mirror_session(session_name, verbose):
     """Show existing everflow sessions"""
     cmd = "acl-loader show session"
 
@@ -1618,9 +1684,12 @@ def state(redis_unix_socket_path):
         entry = db.get_all(db.STATE_DB, tk)
         r = []
         r.append(remove_prefix(tk, prefix))
-        r.append(entry['restore_count'])
+        if 'restore_count' not in entry:
+            r.append("")
+        else:
+            r.append(entry['restore_count'])
 
-        if 'state' not in  entry:
+        if 'state' not in entry:
             r.append("")
         else:
             r.append(entry['state'])
@@ -1657,6 +1726,12 @@ def config(redis_unix_socket_path):
             if 'neighsyncd_timer' in  data[k]:
                 r.append("neighsyncd_timer")
                 r.append(data[k]['neighsyncd_timer'])
+            elif 'bgp_timer' in data[k]:
+                r.append("bgp_timer")
+                r.append(data[k]['bgp_timer'])
+            elif 'teamsyncd_timer' in data[k]:
+                r.append("teamsyncd_timer")
+                r.append(data[k]['teamsyncd_timer'])
             else:
                 r.append("NULL")
                 r.append("NULL")

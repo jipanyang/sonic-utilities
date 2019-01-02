@@ -86,8 +86,8 @@ class AclLoader(object):
         self.sessions_db_info = {}
         self.configdb = ConfigDBConnector()
         self.configdb.connect()
-        self.appdb = SonicV2Connector(host="127.0.0.1")
-        self.appdb.connect(self.appdb.APPL_DB)
+        self.statedb = SonicV2Connector(host="127.0.0.1")
+        self.statedb.connect(self.statedb.STATE_DB)
 
         self.read_tables_info()
         self.read_rules_info()
@@ -120,9 +120,9 @@ class AclLoader(object):
         """
         self.sessions_db_info = self.configdb.get_table(self.MIRROR_SESSION)
         for key in self.sessions_db_info.keys():
-            app_db_info = self.appdb.get_all(self.appdb.APPL_DB, "{}:{}".format(self.MIRROR_SESSION, key))
-            if app_db_info:
-                status = app_db_info.get("status", "inactive")
+            state_db_info = self.statedb.get_all(self.statedb.STATE_DB, "{}|{}".format(self.MIRROR_SESSION, key))
+            if state_db_info:
+                status = state_db_info.get("status", "inactive")
             else:
                 status = "error"
             self.sessions_db_info[key]["status"] = status
@@ -271,14 +271,14 @@ class AclLoader(object):
 
         if rule.ip.config.source_ip_address:
             source_ip_address = rule.ip.config.source_ip_address.encode("ascii")
-            if ipaddr.IPNetwork(source_ip_address) == 4:
+            if ipaddr.IPNetwork(source_ip_address).version == 4:
                 rule_props["SRC_IP"] = source_ip_address
             else:
                 rule_props["SRC_IPV6"] = source_ip_address
 
         if rule.ip.config.destination_ip_address:
             destination_ip_address = rule.ip.config.destination_ip_address.encode("ascii")
-            if ipaddr.IPNetwork(destination_ip_address) == 4:
+            if ipaddr.IPNetwork(destination_ip_address).version == 4:
                 rule_props["DST_IP"] = destination_ip_address
             else:
                 rule_props["DST_IPV6"] = destination_ip_address
@@ -305,7 +305,7 @@ class AclLoader(object):
         else:
             return port, False
 
-    def convert_transport(self,  table_name, rule_idx, rule):
+    def convert_transport(self, table_name, rule_idx, rule):
         rule_props = {}
 
         if rule.transport.config.source_port:
@@ -340,6 +340,14 @@ class AclLoader(object):
 
         return rule_props
 
+    def convert_input_interface(self, table_name, rule_idx, rule):
+        rule_props = {}
+
+        if rule.input_interface.interface_ref.config.interface:
+            rule_props["IN_PORTS"] = rule.input_interface.interface_ref.config.interface
+
+        return rule_props
+
     def convert_rule_to_db_schema(self, table_name, rule):
         """
         Convert rules format from openconfig ACL to Config DB schema
@@ -357,6 +365,7 @@ class AclLoader(object):
         deep_update(rule_props, self.convert_l2(table_name, rule_idx, rule))
         deep_update(rule_props, self.convert_ip(table_name, rule_idx, rule))
         deep_update(rule_props, self.convert_transport(table_name, rule_idx, rule))
+        deep_update(rule_props, self.convert_input_interface(table_name, rule_idx, rule))
 
         return rule_data
 
