@@ -746,29 +746,6 @@ def pwm_pg_shared():
     command = 'watermarkstat -p -t pg_shared'
     run_command(command)
 
-#
-# 'pfc' group ###
-#
-
-@interfaces.group(cls=AliasedGroup, default_if_no_args=False)
-def pfc():
-    """Show PFC information"""
-    pass
-
-
-#
-# 'pfc status' command ###
-#
-
-@pfc.command()
-@click.argument('interface', type=click.STRING, required=False)
-def status(interface):
-    """Show PFC information"""
-    if interface is None:
-        interface = ""
-
-    run_command("pfc show asymmetric {0}".format(interface))
-
 
 #
 # 'mac' command ("show mac ...")
@@ -791,6 +768,21 @@ def mac(vlan, port, verbose):
 
     run_command(cmd, display_cmd=verbose)
 
+#
+# 'show route-map' command ("show route-map")
+#
+
+@cli.command('route-map')
+@click.argument('route_map_name', required=False)
+@click.option('--verbose', is_flag=True, help="Enable verbose output")
+def route_map(route_map_name, verbose):
+    """show route-map"""
+    cmd = 'sudo vtysh -c "show route-map'
+    if route_map_name is not None:
+        cmd += ' {}'.format(route_map_name)
+    cmd += '"'
+    run_command(cmd, display_cmd=verbose)
+	
 #
 # 'ip' group ("show ip ...")
 #
@@ -900,6 +892,22 @@ def route(ipaddress, verbose):
     cmd += '"'
 
     run_command(cmd, display_cmd=verbose)
+
+#
+# 'prefix-list' subcommand ("show ip prefix-list")
+#
+
+@ip.command('prefix-list')
+@click.argument('prefix_list_name', required=False)
+@click.option('--verbose', is_flag=True, help="Enable verbose output")
+def prefix_list(prefix_list_name, verbose):
+    """show ip prefix-list"""
+    cmd = 'sudo vtysh -c "show ip prefix-list'
+    if prefix_list_name is not None:
+        cmd += ' {}'.format(prefix_list_name)
+    cmd += '"'
+    run_command(cmd, display_cmd=verbose)
+
 
 # 'protocol' command
 @ip.command()
@@ -1627,7 +1635,7 @@ def mmu():
 @cli.command('reboot-cause')
 def reboot_cause():
     """Show cause of most recent reboot"""
-    PREVIOUS_REBOOT_CAUSE_FILE = "/var/cache/sonic/previous-reboot-cause.txt"
+    PREVIOUS_REBOOT_CAUSE_FILE = "/host/reboot-cause/previous-reboot-cause.txt"
 
     # At boot time, PREVIOUS_REBOOT_CAUSE_FILE is generated based on
     # the contents of the 'reboot cause' file as it was left when the device
