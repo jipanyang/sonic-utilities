@@ -214,6 +214,36 @@ def abort_if_false(ctx, param, value):
     if not value:
         ctx.abort()
 
+def get_container_image_name(container_name):
+    # example image: docker-lldp-sv2:latest
+    cmd = "docker inspect --format '{{.Config.Image}}' " + container_name
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
+    (out, err) = proc.communicate()
+    if proc.returncode != 0:
+        sys.exit(proc.returncode)
+    image_latest = out.rstrip()
+
+    # example image_name: docker-lldp-sv2
+    cmd = "echo " + image_latest + " | cut -d ':' -f 1"
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
+    image_name = proc.stdout.read().rstrip()
+    return image_name
+
+def get_container_image_id(image_tag):
+    # this is image_id for image with tag, like 'docker-teamd:latest'
+    cmd = "docker images --format '{{.ID}}' " + image_tag
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
+    image_id = proc.stdout.read().rstrip()
+    return image_id
+
+def get_container_image_id_all(image_name):
+    # All images id under the image name like 'docker-teamd'
+    cmd = "docker images --format '{{.ID}}' " + image_name
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
+    image_id_all = proc.stdout.read()
+    image_id_all = image_id_all.splitlines()
+    image_id_all = set(image_id_all)
+    return image_id_all
 
 # Main entrypoint
 @click.group()
@@ -398,24 +428,16 @@ def cleanup():
 @click.option('--cleanup_image', is_flag=True, help="Clean up old docker image")
 @click.option('--enforce_check', is_flag=True, help="Enforce pending task check for docker upgrade")
 @click.option('--tag', type=str, help="Tag for the new docker image")
+@click.option('--warm', is_flag=True, help="Perform warm upgrade")
 @click.argument('container_name', metavar='<container_name>', required=True,
     type=click.Choice(["swss", "snmp", "lldp", "bgp", "pmon", "dhcp_relay", "telemetry", "teamd"]))
 @click.argument('url')
-def upgrade_docker(container_name, url, cleanup_image, enforce_check, tag):
+def upgrade_docker(container_name, url, cleanup_image, enforce_check, tag, warm):
     """ Upgrade docker image from local binary or URL"""
 
-    # example image: docker-lldp-sv2:latest
-    cmd = "docker inspect --format '{{.Config.Image}}' " + container_name
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
-    (out, err) = proc.communicate()
-    if proc.returncode != 0:
-        sys.exit(proc.returncode)
-    image_latest = out.rstrip()
-
-    # example image_name: docker-lldp-sv2
-    cmd = "echo " + image_latest + " | cut -d ':' -f 1"
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
-    image_name = proc.stdout.read().rstrip()
+    image_name = get_container_image_name(container_name)
+    image_latest = image_name + ":latest"
+    image_id_previous = get_container_image_id(image_latest)
 
     DEFAULT_IMAGE_PATH = os.path.join("/tmp/", image_name)
     if url.startswith('http://') or url.startswith('https://'):
@@ -436,7 +458,7 @@ def upgrade_docker(container_name, url, cleanup_image, enforce_check, tag):
         click.echo("Image file '{}' does not exist or is not a regular file. Aborting...".format(image_path))
         raise click.Abort()
 
-    warm = False
+    warm_configured = False
     # warm restart enable/disable config is put in stateDB, not persistent across cold reboot, not saved to config_DB.json file
     state_db = SonicV2Connector(host='127.0.0.1')
     state_db.connect(state_db.STATE_DB, False)
@@ -444,11 +466,16 @@ def upgrade_docker(container_name, url, cleanup_image, enforce_check, tag):
     prefix = 'WARM_RESTART_ENABLE_TABLE' + TABLE_NAME_SEPARATOR
     _hash = '{}{}'.format(prefix, container_name)
     if state_db.get(state_db.STATE_DB, _hash, "enable") == "true":
-        warm = True
+        warm_configured = True
     state_db.close(state_db.STATE_DB)
 
+    if container_name == "swss" or container_name == "bgp" or container_name == "teamd":
+        if warm_configured == False and warm:
+           run_command("config warm_restart enable %s" % container_name)
+
+    warm_app_name = ""
     # warm restart specific procssing for swss, bgp and teamd dockers.
-    if warm == True:
+    if warm_configured == True or warm:
         # make sure orchagent is in clean state if swss is to be upgraded
         if container_name == "swss":
             skipPendingTaskCheck = " -s"
@@ -471,6 +498,10 @@ def upgrade_docker(container_name, url, cleanup_image, enforce_check, tag):
                     click.echo("Orchagent is in clean state and frozen for warm upgrade")
                     break
                 run_command("sleep 1")
+            # clean orchagent reconcilation state from last warm start if exists
+            warm_app_name = "orchagent"
+            cmd = "docker exec -i database redis-cli -n 6 hdel 'WARM_RESTART_TABLE|" + warm_app_name + "' state"
+            run_command(cmd)
 
         elif container_name == "bgp":
             # Kill bgpd to restart the bgp graceful restart procedure
@@ -478,6 +509,10 @@ def upgrade_docker(container_name, url, cleanup_image, enforce_check, tag):
             run_command("docker exec -i bgp pkill -9 zebra")
             run_command("docker exec -i bgp pkill -9 bgpd")
             run_command("sleep 2") # wait 2 seconds for bgp to settle down
+            # clean bgp reconcilation state from last warm start if exists
+            warm_app_name = "bgp"
+            cmd = "docker exec -i database redis-cli -n 6 hdel 'WARM_RESTART_TABLE|" + warm_app_name + "' state"
+            run_command(cmd)
             click.echo("Stopped  bgp ...")
 
         elif container_name == "teamd":
@@ -486,11 +521,14 @@ def upgrade_docker(container_name, url, cleanup_image, enforce_check, tag):
             # It will prepare teamd for warm-reboot
             run_command("docker exec -i teamd pkill -USR1 teamd > /dev/null")
             run_command("sleep 2") # wait 2 seconds for teamd to settle down
+            # clean teamsyncd reconcilation state from last warm start if exists
+            warm_app_name = "teamsyncd"
+            cmd = "docker exec -i database redis-cli -n 6 hdel 'WARM_RESTART_TABLE|" + warm_app_name + "' state"
+            run_command(cmd)
             click.echo("Stopped  teamd ...")
 
     run_command("systemctl stop %s" % container_name)
     run_command("docker rm %s " % container_name)
-    run_command("docker rmi %s " % image_latest)
     run_command("docker load < %s" % image_path)
     if tag == None:
         # example image: docker-lldp-sv2:latest
@@ -498,26 +536,100 @@ def upgrade_docker(container_name, url, cleanup_image, enforce_check, tag):
     run_command("docker tag %s:latest %s:%s" % (image_name, image_name, tag))
     run_command("systemctl restart %s" % container_name)
 
-    # Clean up old docker images
-    if cleanup_image:
-        # All images id under the image name
-        cmd = "docker images --format '{{.ID}}' " + image_name
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
-        image_id_all = proc.stdout.read()
-        image_id_all = image_id_all.splitlines()
-        image_id_all = set(image_id_all)
+    # All images id under the image name
+    image_id_all = get_container_image_id_all(image_name)
 
-        # this is image_id for image with "latest" tag
-        cmd = "docker images --format '{{.ID}}' " + image_latest
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
-        image_id_latest = proc.stdout.read().rstrip()
+    # this is image_id for image with "latest" tag
+    image_id_latest = get_container_image_id(image_latest)
 
-        for id in image_id_all:
-            if id != image_id_latest:
-                run_command("docker rmi -f %s" % id)
+    for id in image_id_all:
+        if id != image_id_latest:
+            # Unless requested, the previoud docker image will be preserved
+            if not cleanup_image and id == image_id_previous:
+                continue
+            run_command("docker rmi -f %s" % id)
 
-    run_command("sleep 5") # wait 5 seconds for application to sync
+    exp_state = "reconciled"
+    state = ""
+    # post warm restart specific procssing for swss, bgp and teamd dockers, wait for reconciliation state.
+    if warm_configured == True or warm:
+        count = 0
+        if warm_app_name:
+            cmd = "docker exec -i database redis-cli -n 6 hget 'WARM_RESTART_TABLE|" + warm_app_name + "' state"
+            # Wait up to 180 seconds for reconciled state
+            while state != exp_state and count < 90:
+                sys.stdout.write('\r')
+                sys.stdout.write("[%-s" % ('='*count))
+                sys.stdout.flush()
+                count += 1
+                time.sleep(2)
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
+                state = proc.stdout.read().rstrip()
+            sys.stdout.write("]\n\r")
+            if state != exp_state:
+                click.echo("%s failed to reach %s state"%(warm_app_name, exp_state))
+    else:
+        exp_state = ""  # this is cold upgrade
+
+    # Restore to previous cold restart setting
+    if warm_configured == False and warm:
+        if container_name == "swss" or container_name == "bgp" or container_name == "teamd":
+            run_command("config warm_restart disable %s" % container_name)
+
+    # Currently restarting swss service doesn't bring back those dependent services, bring up them explicitly here.
+    if container_name == "swss":
+        services = [
+            'radv',
+            'snmp',
+            'dhcp_relay',
+        ]
+        for service in services:
+            try:
+                run_command("systemctl start %s" % service)
+            except SystemExit as e:
+                click.echo('Failed')
+                log_error("Start {} failed with error {}".format(service, e))
+                raise
+
+    if state == exp_state:
+        click.echo('Done')
+    else:
+        click.echo('Failed')
+        sys.exit(1)
+
+
+# rollback docker image
+@cli.command()
+@click.option('-y', '--yes', is_flag=True, callback=abort_if_false,
+        expose_value=False, prompt='Docker image will be rolled back, continue?')
+@click.argument('container_name', metavar='<container_name>', required=True,
+    type=click.Choice(["swss", "snmp", "lldp", "bgp", "pmon", "dhcp_relay", "telemetry", "teamd", "radv"]))
+def rollback_docker(container_name):
+    """ Rollback docker image to previous version"""
+    image_name = get_container_image_name(container_name)
+    # All images id under the image name
+    image_id_all = get_container_image_id_all(image_name)
+    if len(image_id_all) != 2:
+        click.echo("Two images required, but there are '{}' images for '{}'. Aborting...".format(len(image_id_all), image_name))
+        raise click.Abort()
+
+    image_latest = image_name + ":latest"
+    image_id_previous = get_container_image_id(image_latest)
+
+    version_tag = ""
+    for id in image_id_all:
+        if id != image_id_previous:
+            version_tag = get_docker_tag_name(id)
+
+    # make previous image as latest
+    run_command("docker tag %s:%s %s:latest" % (image_name, version_tag, image_name))
+    if container_name == "swss" or container_name == "bgp" or container_name == "teamd":
+        click.echo("Cold reboot is required to restore system state after '{}' rollback !!".format(container_name))
+    else:
+        run_command("systemctl restart %s" % container_name)
+
     click.echo('Done')
+
 
 if __name__ == '__main__':
     cli()
