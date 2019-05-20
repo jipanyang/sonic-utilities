@@ -473,7 +473,7 @@ def upgrade_docker(container_name, url, cleanup_image, enforce_check, tag, warm)
         if warm_configured == False and warm:
            run_command("config warm_restart enable %s" % container_name)
 
-    warm_app_name = ""
+    warm_app_names = []
     # warm restart specific procssing for swss, bgp and teamd dockers.
     if warm_configured == True or warm:
         # make sure orchagent is in clean state if swss is to be upgraded
@@ -497,22 +497,15 @@ def upgrade_docker(container_name, url, cleanup_image, enforce_check, tag, warm)
                 else:
                     click.echo("Orchagent is in clean state and frozen for warm upgrade")
                     break
-                run_command("sleep 1")
-            # clean orchagent reconcilation state from last warm start if exists
-            warm_app_name = "orchagent"
-            cmd = "docker exec -i database redis-cli -n 6 hdel 'WARM_RESTART_TABLE|" + warm_app_name + "' state"
-            run_command(cmd)
+
+            warm_app_names = ["orchagent", "neighsyncd"]
 
         elif container_name == "bgp":
             # Kill bgpd to restart the bgp graceful restart procedure
             click.echo("Stopping bgp ...")
             run_command("docker exec -i bgp pkill -9 zebra")
             run_command("docker exec -i bgp pkill -9 bgpd")
-            run_command("sleep 2") # wait 2 seconds for bgp to settle down
-            # clean bgp reconcilation state from last warm start if exists
-            warm_app_name = "bgp"
-            cmd = "docker exec -i database redis-cli -n 6 hdel 'WARM_RESTART_TABLE|" + warm_app_name + "' state"
-            run_command(cmd)
+            warm_app_names = ["bgp"]
             click.echo("Stopped  bgp ...")
 
         elif container_name == "teamd":
@@ -520,12 +513,13 @@ def upgrade_docker(container_name, url, cleanup_image, enforce_check, tag, warm)
             # Send USR1 signal to all teamd instances to stop them
             # It will prepare teamd for warm-reboot
             run_command("docker exec -i teamd pkill -USR1 teamd > /dev/null")
-            run_command("sleep 2") # wait 2 seconds for teamd to settle down
-            # clean teamsyncd reconcilation state from last warm start if exists
-            warm_app_name = "teamsyncd"
-            cmd = "docker exec -i database redis-cli -n 6 hdel 'WARM_RESTART_TABLE|" + warm_app_name + "' state"
-            run_command(cmd)
+            warm_app_names = ["teamsyncd"]
             click.echo("Stopped  teamd ...")
+
+        # clean app reconcilation state from last warm start if exists
+        for warm_app_name in warm_app_names:
+            cmd = "docker exec -i database redis-cli " + _get_redis_dbid_port("STATE_DB") + " hdel 'WARM_RESTART_TABLE|" + warm_app_name + "' state"
+            run_command(cmd)
 
     run_command("systemctl stop %s" % container_name)
     run_command("docker rm %s " % container_name)
@@ -554,11 +548,12 @@ def upgrade_docker(container_name, url, cleanup_image, enforce_check, tag, warm)
     # post warm restart specific procssing for swss, bgp and teamd dockers, wait for reconciliation state.
     if warm_configured == True or warm:
         count = 0
-        if warm_app_name:
+        for warm_app_name in warm_app_names:
+            state = ""
             cmd = "docker exec -i database redis-cli -n 6 hget 'WARM_RESTART_TABLE|" + warm_app_name + "' state"
             # Wait up to 180 seconds for reconciled state
             while state != exp_state and count < 90:
-                sys.stdout.write('\r')
+                sys.stdout.write("\r  {}: ".format(warm_app_name))
                 sys.stdout.write("[%-s" % ('='*count))
                 sys.stdout.flush()
                 count += 1
